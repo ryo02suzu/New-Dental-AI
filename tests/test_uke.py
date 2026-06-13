@@ -263,6 +263,7 @@ class TestChecker:
             "IR,1,13,3,1234567,,テスト歯科医院,50604,03-1234-5678,",
             f"RE,1,3112,50604,山田　太郎,1,{birth},,,5060401,,,,,,K001",
             f"HO,06132013,はーと,1234567,{actual_days},580",
+            "HS,5060401,1,,0000999,,う蝕症第２度",
             *ss_lines,
             "GO,1,580,99",
         ]
@@ -314,6 +315,32 @@ class TestChecker:
         findings = [f for f in self.check(uke, tables_dir) if f.rule == "併算定背反"]
         assert len(findings) == 1
         assert "歯科特定疾患療養管理料" in findings[0].message
+
+    def test_missing_disease(self, tables_dir):
+        # 傷病名（HSレコード）のないレセプト → NG
+        lines = [
+            "IR,1,13,3,1234567,,テスト歯科医院,50604,03-1234-5678,",
+            "RE,1,3112,50604,山田　太郎,1,3601015,,,5060401,,,,,,K001",
+            "HO,06132013,はーと,1234567,1,261",
+            ss_record("11", "1", "301000110", 261, 1, {2: 1}),
+            "GO,1,261,99",
+        ]
+        findings = self.check(parse_bytes(build_uke(lines)), tables_dir)
+        assert ("NG", "傷病名") in [(f.severity, f.rule) for f in findings]
+
+    def test_demo_generator(self, tables_dir):
+        # デモ生成器: 正規のUKEとして読め、混入したミスが検出される
+        from new_dental_ai.uke.demo import generate
+
+        uke = parse_bytes(generate(seed=1))
+        assert uke.validate() == []
+        assert generate(seed=1) == generate(seed=1)
+        rules = {f.rule for f in self.check(uke, tables_dir)}
+        assert {"年齢制限", "算定回数限度", "併算定背反", "実日数", "傷病名"} <= rules
+        # ミスなし生成では指摘ゼロ（点検テーブル対象の指摘がない）
+        clean = parse_bytes(generate(seed=1, with_errors=False))
+        assert clean.validate() == []
+        assert self.check(clean, tables_dir) == []
 
     def test_cli_check(self, tmp_path, capsys, tables_dir):
         from new_dental_ai.uke.__main__ import main

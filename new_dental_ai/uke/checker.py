@@ -75,6 +75,9 @@ def check_receipt(receipt: Receipt, tables: CheckTables) -> list[Finding]:
             severity=severity, rule=rule, message=message,
         ))
 
+    if not receipt.hss:
+        add(NG, "傷病名", "傷病名（HSレコード）が1件も記録されていません")
+
     _check_count_limits(totals, day_counts, tables, add)
     _check_age_limits(receipt, totals, tables, add)
     _check_day_relations(receipt, totals, tables, add)
