@@ -10,6 +10,7 @@
         print(receipt.patient_name, receipt.main_insurance_points)
 """
 
+from .master import DentalMaster, MasterEntry
 from .models import (
     Receipt,
     UkeFile,
@@ -22,6 +23,8 @@ from .models import (
 from .parser import UkeParseError, parse_bytes, parse_file
 
 __all__ = [
+    "DentalMaster",
+    "MasterEntry",
     "Receipt",
     "UkeFile",
     "UkeRecord",

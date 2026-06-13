@@ -27,6 +27,7 @@
 - 和暦 (GYYMM / GYYMMDD) → 西暦変換
 - レセプト種別コード（別表6）の読み下し（例: `3112` → 歯科・医保・国保・単独・本人/世帯主・入院外）
 - 整合性チェック（GO の総件数・総合計点数、診療行為の回数と算定日情報の突合）
+- 歯科診療行為マスター（基本テーブル）による名称解決（例: `301000110` → 歯科初診料）
 
 ### 使い方
 
@@ -50,6 +51,12 @@ python -m new_dental_ai.uke RECEIPTC.UKE
 
 # JSON 出力
 python -m new_dental_ai.uke --json RECEIPTC.UKE
+
+# 診療行為マスターをダウンロード（診療報酬情報提供サービスの公開データ）
+python -m new_dental_ai.uke.master --download data/
+
+# 明細表示（マスターで名称解決）
+python -m new_dental_ai.uke --details --master data/h_YYYYMMDD.csv RECEIPTC.UKE
 ```
 
 ### テスト

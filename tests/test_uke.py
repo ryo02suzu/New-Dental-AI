@@ -35,14 +35,14 @@ SAMPLE_LINES = [
     "RE,1,3112,50604,山田　太郎,1,3601015,,,5060401,,,,,,K001",
     "HO,06132013,はーと,1234567,2,580",
     "HS,,,110100,8830109",
-    ss_record("11", "1", "301000010", 261, 1, {2: 1}),
+    ss_record("11", "1", "301000110", 261, 1, {2: 1}),
     ss_record("12", "1", "301000370", 319, 2, {2: 1, 16: 1}),
     "CO,99,1,810000001,丁寧な歯清を実施",
     # レセプト2: 公費単独・入院外
     "RE,2,3212,50604,佐藤　花子,2,4050203,,,5060105,,,,,,K002",
     "KO,12131011,1234567,,3,580",
     "HS,,,210100,8830109",
-    ss_record("11", "5", "301000010", 261, 1, {7: 1}),
+    ss_record("11", "5", "301000110", 261, 1, {7: 1}),
     ss_record("12", "5", "301000370", 319, 2, {14: 1, 28: 1}),
     "GO,2,1160,99",
 ]
@@ -172,7 +172,7 @@ class TestValidation:
 
     def test_santeibi_kaisu_mismatch(self):
         lines = list(SAMPLE_LINES)
-        lines[4] = ss_record("11", "1", "301000010", 261, 3, {2: 1})  # 回数3だが算定日合計1
+        lines[4] = ss_record("11", "1", "301000110", 261, 3, {2: 1})  # 回数3だが算定日合計1
         issues = parse_bytes(build_uke(lines)).validate()
         assert any("算定日情報" in i for i in issues)
 
@@ -185,6 +185,38 @@ class TestValidation:
             parse_bytes(build_uke(["IR,1,13,3,1234567,,テスト,50604,,", "HO,06132013,a,1,2,580"]))
 
 
+# 歯科診療行為マスター（基本テーブル）の抜粋（公開データ）
+MASTER_ROWS = [
+    "0,H,301000110,A,000,00,001,00000,歯科初診料,初診,3,272.00",
+    "0,H,301000210,A,000,00,002,00000,地域歯科診療支援病院歯科初診料,病初診,3,296.00",
+    "0,H,301000370,A,000,00,004,CA001,乳幼児加算（初診）,乳（初診）,3,40.00",
+]
+
+
+@pytest.fixture
+def master_csv(tmp_path):
+    path = tmp_path / "h_master.csv"
+    path.write_bytes(("\r\n".join(MASTER_ROWS) + "\r\n").encode("cp932"))
+    return path
+
+
+class TestMaster:
+    def test_load_and_lookup(self, master_csv):
+        from decimal import Decimal
+
+        from new_dental_ai.uke import DentalMaster
+
+        master = DentalMaster.load(master_csv)
+        assert len(master) == 3
+        assert master.name("301000110") == "歯科初診料"
+        entry = master.lookup("301000110")
+        assert entry.kubun == "A000"
+        assert entry.short_name == "初診"
+        assert entry.points == Decimal("272.00")
+        assert master.name("999999999") is None
+        assert "301000370" in master
+
+
 class TestCli:
     def test_summary(self, tmp_path, capsys):
         from new_dental_ai.uke.__main__ import main
@@ -195,6 +227,15 @@ class TestCli:
         out = capsys.readouterr().out
         assert "テスト歯科医院" in out
         assert "山田　太郎" in out
+
+    def test_details_with_master(self, tmp_path, capsys, master_csv):
+        from new_dental_ai.uke.__main__ import main
+
+        path = tmp_path / "RECEIPTC.UKE"
+        path.write_bytes(build_uke(SAMPLE_LINES))
+        assert main(["--details", "--master", str(master_csv), str(path)]) == 0
+        out = capsys.readouterr().out
+        assert "歯科初診料" in out  # 301000110 が名称解決される
 
     def test_json(self, tmp_path, capsys):
         import json
