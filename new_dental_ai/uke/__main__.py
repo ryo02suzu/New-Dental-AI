@@ -12,8 +12,10 @@ import argparse
 import json
 import sys
 
+from .checker import check_uke
 from .master import DentalMaster
 from .parser import parse_file
+from .tables import CheckTables
 
 _CODE_FIELD = {
     "SS": "診療行為コード",
@@ -35,6 +37,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--master", metavar="CSV",
         help="歯科診療行為マスター（基本テーブル）CSV。コードを名称に解決する",
+    )
+    parser.add_argument(
+        "--check", metavar="DIR",
+        help="点検テーブルのディレクトリを指定してレセプト点検を実行する",
     )
     args = parser.parse_args(argv)
 
@@ -92,13 +98,28 @@ def main(argv: list[str] | None = None) -> int:
                         line += f" x{kaisu}"
                     print(line)
 
+    exit_code = 0
+
+    if args.check:
+        tables = CheckTables.load_dir(args.check)
+        findings = check_uke(uke, tables)
+        print()
+        if findings:
+            print(f"点検結果: {len(findings)}件の指摘")
+            for finding in findings:
+                print(f"  {finding}")
+            if any(f.severity == "NG" for f in findings):
+                exit_code = 1
+        else:
+            print("点検結果: 指摘なし")
+
     issues = uke.validate()
     if issues:
         print("\n整合性チェック:", file=sys.stderr)
         for issue in issues:
             print(f"  NG {issue}", file=sys.stderr)
-        return 1
-    return 0
+        exit_code = 1
+    return exit_code
 
 
 if __name__ == "__main__":

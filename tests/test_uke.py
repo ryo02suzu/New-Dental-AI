@@ -217,6 +217,115 @@ class TestMaster:
         assert "301000370" in master
 
 
+# 点検テーブルの抜粋（公開データに基づく。302000110 の特例条件のみテスト用に 0）
+SANTEI_ROWS = [  # h-6 算定回数限度: 単位, 上限回数, 特例条件
+    "0,301000110,A,000,00,001,00000,歯科初診料,初診,131,1,1,20260601,99999999,0",
+    "0,301000370,A,000,00,004,CA001,乳幼児加算（初診）,乳（初診）,131,1,1,20260601,99999999,0",
+    "0,302000110,B,000,04,000,00000,歯科疾患管理料,歯科疾患管理料,131,1,0,20260601,99999999,0",
+]
+NENREI_ROWS = [  # h-8 年齢制限: 下限, 上限
+    "0,301000370,A,000,00,004,CA001,乳幼児加算（初診）,乳（初診）,00,06,20260601,99999999,0",
+]
+JITSUNISSU_ROWS = [  # h-10 実日数関連: 関係区分
+    "0,302000110,B,000,04,000,00000,歯科疾患管理料,歯科疾患管理料,1,0,20260601,99999999,0",
+]
+
+
+def heisantei_row(code_a, name_a, code_b, name_b):
+    """h-9 併算定背反の1行（相手は最大10組・各9項目）を組み立てる。"""
+    row = ["0", code_a, "B", "000", "00", "000", "00000", name_a, name_a]
+    row += ["0", code_b, "B", "000", "00", "000", "00000", name_b, name_b]
+    row += [""] * (9 * 9)  # 残り9組分
+    row += ["20260601", "99999999", "0", "0", "0"]
+    return ",".join(row)
+
+
+@pytest.fixture
+def tables_dir(tmp_path):
+    files = {
+        "h-6_20260601.csv": SANTEI_ROWS,
+        "h-8_20260601.csv": NENREI_ROWS,
+        "h-9_20260601.csv": [
+            heisantei_row("302000110", "歯科疾患管理料", "302000710", "歯科特定疾患療養管理料"),
+        ],
+        "h-10_20260601.csv": JITSUNISSU_ROWS,
+    }
+    d = tmp_path / "tables"
+    d.mkdir()
+    for name, rows in files.items():
+        (d / name).write_bytes(("\r\n".join(rows) + "\r\n").encode("cp932"))
+    return d
+
+
+class TestChecker:
+    def make_uke(self, ss_lines, birth="3601015", actual_days=2):
+        lines = [
+            "IR,1,13,3,1234567,,テスト歯科医院,50604,03-1234-5678,",
+            f"RE,1,3112,50604,山田　太郎,1,{birth},,,5060401,,,,,,K001",
+            f"HO,06132013,はーと,1234567,{actual_days},580",
+            *ss_lines,
+            "GO,1,580,99",
+        ]
+        return parse_bytes(build_uke(lines))
+
+    def check(self, uke, tables_dir):
+        from new_dental_ai.uke import CheckTables, check_uke
+
+        return check_uke(uke, CheckTables.load_dir(tables_dir))
+
+    def test_age_limit_adult_with_infant_addition(self, tables_dir):
+        # 昭和60年生まれ（成人）に乳幼児加算 → NG
+        uke = self.make_uke([ss_record("12", "1", "301000370", 319, 1, {2: 1})])
+        findings = self.check(uke, tables_dir)
+        assert len(findings) == 1
+        f = findings[0]
+        assert (f.severity, f.rule) == ("NG", "年齢制限")
+        assert "乳幼児加算（初診）" in f.message and "38歳" in f.message
+
+    def test_age_limit_child_ok(self, tables_dir):
+        # 令和元年5月1日生まれ（4歳）なら指摘なし
+        uke = self.make_uke(
+            [ss_record("12", "1", "301000370", 319, 1, {2: 1})], birth="5010501"
+        )
+        assert self.check(uke, tables_dir) == []
+
+    def test_count_limit(self, tables_dir):
+        # 初診料 月2回: 上限1回・特例条件あり → 要確認
+        uke = self.make_uke([ss_record("11", "1", "301000110", 261, 2, {2: 1, 16: 1})])
+        findings = self.check(uke, tables_dir)
+        assert [(f.severity, f.rule) for f in findings] == [("要確認", "算定回数限度")]
+        assert "月2回" in findings[0].message
+
+    def test_count_limit_ng_and_day_relation(self, tables_dir):
+        # 歯科疾患管理料 月2回（上限1回・特例なし）→ NG、実日数1日超え → 要確認
+        uke = self.make_uke(
+            [ss_record("13", "1", "302000110", 100, 2, {2: 1, 16: 1})], actual_days=1
+        )
+        findings = self.check(uke, tables_dir)
+        assert ("NG", "算定回数限度") in [(f.severity, f.rule) for f in findings]
+        assert ("要確認", "実日数") in [(f.severity, f.rule) for f in findings]
+
+    def test_exclusion(self, tables_dir):
+        # 歯科疾患管理料と歯科特定疾患療養管理料の併算定 → 要確認（1件のみ報告）
+        uke = self.make_uke([
+            ss_record("13", "1", "302000110", 100, 1, {2: 1}),
+            ss_record("13", "1", "302000710", 170, 1, {2: 1}),
+        ])
+        findings = [f for f in self.check(uke, tables_dir) if f.rule == "併算定背反"]
+        assert len(findings) == 1
+        assert "歯科特定疾患療養管理料" in findings[0].message
+
+    def test_cli_check(self, tmp_path, capsys, tables_dir):
+        from new_dental_ai.uke.__main__ import main
+
+        path = tmp_path / "RECEIPTC.UKE"
+        path.write_bytes(build_uke(SAMPLE_LINES))
+        code = main(["--check", str(tables_dir), str(path)])
+        out = capsys.readouterr().out
+        assert "点検結果" in out and "年齢制限" in out
+        assert code == 1  # NG（成人への乳幼児加算）を含む
+
+
 class TestCli:
     def test_summary(self, tmp_path, capsys):
         from new_dental_ai.uke.__main__ import main

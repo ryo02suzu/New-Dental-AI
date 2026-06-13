@@ -10,7 +10,9 @@
         print(receipt.patient_name, receipt.main_insurance_points)
 """
 
+from .checker import Finding, check_uke
 from .master import DentalMaster, MasterEntry
+from .tables import CheckTables
 from .models import (
     Receipt,
     UkeFile,
@@ -23,7 +25,10 @@ from .models import (
 from .parser import UkeParseError, parse_bytes, parse_file
 
 __all__ = [
+    "CheckTables",
     "DentalMaster",
+    "Finding",
+    "check_uke",
     "MasterEntry",
     "Receipt",
     "UkeFile",
